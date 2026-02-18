@@ -29,6 +29,7 @@ interface EditProfileModalProps {
 export default function EditProfileModal({ onClose }: EditProfileModalProps) {
   const { user, updateProfile } = useAuth();
   const [name, setName] = useState(user?.name ?? '');
+  const [email, setEmail] = useState(user?.email ?? '');
   const [status, setStatus] = useState(user?.status ?? '');
   const [avatar, setAvatar] = useState(user?.avatar ?? '');
   const [preferredLanguage, setPreferredLanguage] = useState(user?.preferredLanguage ?? 'en');
@@ -40,6 +41,7 @@ export default function EditProfileModal({ onClose }: EditProfileModalProps) {
   useEffect(() => {
     if (user) {
       setName(user.name ?? '');
+      setEmail(user.email ?? '');
       setStatus(user.status ?? '');
       setAvatar(user.avatar ?? '');
       setPreferredLanguage(user.preferredLanguage ?? 'en');
@@ -82,10 +84,19 @@ export default function EditProfileModal({ onClose }: EditProfileModalProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (email && !emailRegex.test(email.trim())) {
+      setError('Please enter a valid email address');
+      return;
+    }
+    
     setSaving(true);
     try {
       await updateProfile({
         name: name.trim() || undefined,
+        email: email.trim() || undefined,
         status: status.trim() || undefined,
         avatar: avatar || undefined,
         preferredLanguage: preferredLanguage || 'en',
@@ -162,6 +173,21 @@ export default function EditProfileModal({ onClose }: EditProfileModalProps) {
               className="w-full px-4 py-2.5 bg-stone-50/80 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-app-primary/40 focus:border-app-primary text-stone-800"
               placeholder="Your name"
               maxLength={100}
+            />
+          </div>
+
+          <div>
+            <label htmlFor="edit-email" className="block text-sm font-medium text-stone-600 mb-1.5">
+              Email
+            </label>
+            <input
+              id="edit-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-2.5 bg-stone-50/80 border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-app-primary/40 focus:border-app-primary text-stone-800"
+              placeholder="your.email@example.com"
+              maxLength={255}
             />
           </div>
 

@@ -12,6 +12,35 @@ const LANG_CODE_TO_M2M: Record<string, string> = {
   ru: 'ru', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn',
 };
 
+/** Script-based detection: m2m100 does not support auto-detect, so we infer source language from script. */
+function detectSourceLanguage(text: string): string {
+  if (!text || typeof text !== 'string') return 'en';
+  const t = text.trim();
+  if (!t.length) return 'en';
+  // Arabic (U+0600–U+06FF)
+  if (/[\u0600-\u06FF]/.test(t)) return 'ar';
+  // CJK: Chinese (common + CJK Unified)
+  if (/[\u4E00-\u9FFF\u3400-\u4DBF]/.test(t)) return 'zh';
+  // Hiragana/Katakana → Japanese
+  if (/[\u3040-\u309F\u30A0-\u30FF]/.test(t)) return 'ja';
+  // Hangul → Korean
+  if (/[\uAC00-\uD7AF\u1100-\u11FF]/.test(t)) return 'ko';
+  // Devanagari (Hindi, etc.)
+  if (/[\u0900-\u097F]/.test(t)) return 'hi';
+  // Cyrillic → Russian
+  if (/[\u0400-\u04FF]/.test(t)) return 'ru';
+  // Tamil
+  if (/[\u0B80-\u0BFF]/.test(t)) return 'ta';
+  // Telugu
+  if (/[\u0C00-\u0C7F]/.test(t)) return 'te';
+  // Bengali
+  if (/[\u0980-\u09FF]/.test(t)) return 'bn';
+  // Default to English (covers Latin script and unknown)
+  return 'en';
+}
+
+export { detectSourceLanguage };
+
 export interface TranslateParams {
   text: string;
   sourceLang?: string;
@@ -137,4 +166,99 @@ export async function transcribe(params: TranscribeParams): Promise<string | nul
     console.error('[transcribe] Network error:', err);
     return null;
   }
+}
+
+/**
+ * LLM-based language detection (better than script-based)
+ * Uses Cloudflare Worker AI to detect language accurately
+ * Falls back to script-based detection if Worker is unavailable
+ */
+export interface DetectLanguageResponse {
+  language?: string;
+  error?: string;
+}
+
+export async function detectLanguageLLM(text: string): Promise<string | null> {
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    return 'en'; // Fallback
+  }
+
+  try {
+    const res = await fetch(`${WORKER_URL}/detect-language`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+
+    if (!res.ok) {
+      console.error('[detectLanguageLLM] Worker error:', res.status);
+      return detectSourceLanguage(text); // Fallback to script-based
+    }
+
+    const data: DetectLanguageResponse = await res.json();
+    const detectedLang = data.language?.toLowerCase().trim();
+    
+    // Validate language code (basic check)
+    if (detectedLang && detectedLang.length === 2) {
+      return detectedLang;
+    }
+    
+    return detectSourceLanguage(text); // Fallback if invalid response
+  } catch (err) {
+    console.error('[detectLanguageLLM] Network error:', err);
+    return detectSourceLanguage(text); // Fallback
+  }
+}
+
+/**
+ * Context-aware translation with conversation history
+ * Uses LLM for better tone preservation and context understanding
+ */
+export interface TranslateWithContextParams {
+  text: string;
+  sourceLang?: string;
+  targetLang: string;
+  conversationContext?: Array<{ content: string; senderId: string }>; // Last N messages
+  useSmartMode?: boolean; // Use LLM for context-aware translation
+}
+
+export async function translateWithContext(
+  params: TranslateWithContextParams
+): Promise<string | null> {
+  const { text, sourceLang, targetLang, conversationContext, useSmartMode } = params;
+
+  // Smart mode: Use LLM with context for better tone preservation
+  if (useSmartMode && conversationContext && conversationContext.length > 0) {
+    try {
+      const res = await fetch(`${WORKER_URL}/translate-context`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          sourceLang,
+          targetLang,
+          context: conversationContext.map((m) => m.content).slice(-5), // Last 5 messages
+        }),
+      });
+
+      if (res.ok) {
+        const data: TranslateResponse = await res.json();
+        const raw = data.translatedText || null;
+        if (raw) {
+          const sanitized = sanitizeTranslation(raw, text);
+          if (sanitized) return sanitized;
+          // If sanitization failed but we have a response, try using it if it's reasonable
+          if (raw.length < text.length * 3 && !VERBOSE_LABEL.test(raw)) {
+            return raw;
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[translateWithContext] Smart mode error:', err);
+      // Fall through to fast mode
+    }
+  }
+
+  // Fast mode: Use regular translation (fallback or default)
+  return translate({ text, sourceLang, targetLang });
 }

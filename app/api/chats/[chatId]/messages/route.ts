@@ -3,7 +3,7 @@ import connectDB from '@/lib/mongodb';
 import Message from '@/models/Message';
 import Chat from '@/models/Chat';
 import { verifyToken } from '@/lib/auth';
-import { translate } from '@/lib/cloudflare-worker';
+import { translate, detectSourceLanguage, detectLanguageLLM, translateWithContext } from '@/lib/cloudflare-worker';
 
 export async function GET(
   request: NextRequest,
@@ -137,32 +137,64 @@ export async function POST(
       readBy: [decoded.userId],
     });
 
-    // Always set translatedContent for text/voice: at least original, plus each participant's preferred language
+    // Enhanced translation with context-aware support
     const translatedContent: Record<string, string> = {};
     if ((msgType === 'text' || msgType === 'voice') && finalContent && finalContent !== 'Voice message') {
-      // Always include original content under 'en' so every message has a consistent shape and UI never breaks
-      translatedContent['en'] = finalContent;
+      // Use LLM-based detection (better accuracy than script-based)
+      const sourceLang = await detectLanguageLLM(finalContent) || detectSourceLanguage(finalContent);
 
       const chatWithParticipants = await Chat.findById(params.chatId)
         .populate('participants', 'preferredLanguage')
         .lean() as { participants?: Array<{ preferredLanguage?: string }> } | null;
       const participants = chatWithParticipants?.participants || [];
-      const targetLangs = new Set<string>();
+      const targetLangs = new Set<string>(['en', 'ar']); // ensure en and ar always present for UI
       for (const p of participants as any[]) {
         const lang = p?.preferredLanguage || 'en';
         targetLangs.add(lang);
       }
+
+      // Get conversation context for smart translation (last 5 messages)
+      const recentMessages = await Message.find({ chat: params.chatId })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .lean() as Array<{ content: string; sender: any }>;
+
+      const conversationContext = recentMessages
+        .reverse()
+        .map((m) => ({
+          content: m.content,
+          senderId: m.sender?.toString() || '',
+        }))
+        .filter((m) => m.content && m.content !== 'Voice message' && m.content.trim().length > 0);
+
+      // Determine if we should use smart mode (for longer/complex messages)
+      // Smart mode uses LLM with context for better tone preservation
+      const useSmartMode = finalContent.length > 80 || conversationContext.length >= 2;
+
       for (const lang of targetLangs) {
-        if (translatedContent[lang]) continue; // already have (e.g. en)
+        if (lang === sourceLang) {
+          translatedContent[lang] = finalContent;
+          continue;
+        }
         try {
-          const translated = await translate({ text: finalContent, targetLang: lang });
+          const translated = await translateWithContext({
+            text: finalContent,
+            sourceLang: sourceLang || undefined,
+            targetLang: lang,
+            conversationContext: useSmartMode ? conversationContext : undefined,
+            useSmartMode,
+          });
           if (translated) translatedContent[lang] = translated;
         } catch {
-          // Skip failed translations; keep original for this lang below
+          // fallback to original on failure
         }
         if (!translatedContent[lang]) translatedContent[lang] = finalContent;
       }
-      await Message.findByIdAndUpdate(message._id, { translatedContent });
+
+      await Message.findByIdAndUpdate(message._id, { 
+        translatedContent,
+        detectedLanguage: sourceLang || undefined,
+      });
     }
 
     await Chat.findByIdAndUpdate(params.chatId, {

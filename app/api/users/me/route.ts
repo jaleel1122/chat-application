@@ -26,10 +26,36 @@ export async function PATCH(request: NextRequest) {
     await connectDB();
 
     const body = await request.json();
-    const updates: { name?: string; status?: string; avatar?: string; preferredLanguage?: string } = {};
+    const updates: { name?: string; email?: string; status?: string; avatar?: string; preferredLanguage?: string } = {};
 
     if (typeof body.name === 'string' && body.name.trim()) {
       updates.name = body.name.trim();
+    }
+    if (typeof body.email === 'string' && body.email.trim()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const trimmedEmail = body.email.trim().toLowerCase();
+      
+      if (!emailRegex.test(trimmedEmail)) {
+        return NextResponse.json(
+          { message: 'Invalid email format' },
+          { status: 400 }
+        );
+      }
+      
+      // Check if email is already taken by another user
+      const existingUser = await User.findOne({ 
+        email: trimmedEmail,
+        _id: { $ne: decoded.userId }
+      });
+      
+      if (existingUser) {
+        return NextResponse.json(
+          { message: 'Email is already in use' },
+          { status: 400 }
+        );
+      }
+      
+      updates.email = trimmedEmail;
     }
     if (typeof body.status === 'string') {
       updates.status = body.status.trim();

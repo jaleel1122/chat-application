@@ -223,14 +223,10 @@ export default function MessageList() {
     const record = tc as Record<string, string>;
     const keys = Object.keys(record).filter((k) => record[k]);
     if (keys.length === 0) return msg.content;
-    // Prefer translation in the selected view language
+    // Show the translation for the user's selected view language (e.g. English when "View: English")
     const preferred = record[displayLang];
     if (preferred) return preferred;
-    // When viewing in English, prefer "main" translated content (another language) first so we don't default to English
-    if (displayLang === 'en') {
-      const nonEn = keys.find((k) => k !== 'en');
-      if (nonEn && record[nonEn]) return record[nonEn];
-    }
+    // Fallback: try 'en' then original content (never show another language when user chose English)
     return record['en'] ?? msg.content;
   };
   const langNames: Record<string, string> = {

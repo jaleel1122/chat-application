@@ -17,7 +17,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => void;
-  updateProfile: (updates: { name?: string; status?: string; avatar?: string; preferredLanguage?: string }) => Promise<void>;
+  updateProfile: (updates: { name?: string; email?: string; status?: string; avatar?: string; preferredLanguage?: string }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -92,7 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   };
 
-  const updateProfile = async (updates: { name?: string; status?: string; avatar?: string; preferredLanguage?: string }) => {
+  const updateProfile = async (updates: { name?: string; email?: string; status?: string; avatar?: string; preferredLanguage?: string }) => {
     const token = localStorage.getItem('token');
     if (!token || !user) return;
 
