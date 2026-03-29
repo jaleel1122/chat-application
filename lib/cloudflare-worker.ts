@@ -145,17 +145,24 @@ export interface TranscribeResponse {
 
 export async function transcribe(params: TranscribeParams): Promise<string | null> {
   try {
+    const body: Record<string, string> = { audio: params.audioBase64 };
+    const sl = params.sourceLang ?? 'auto';
+    if (sl && sl !== 'auto') body.sourceLang = sl;
+
     const res = await fetch(`${WORKER_URL}/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        audio: params.audioBase64,
-        sourceLang: params.sourceLang ?? 'auto',
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
+      const raw = await res.text();
+      let err: unknown = raw;
+      try {
+        err = JSON.parse(raw);
+      } catch {
+        /* keep raw */
+      }
       console.error('[transcribe] Worker error:', res.status, err);
       return null;
     }

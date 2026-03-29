@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import connectDB from '@/lib/mongodb';
 import Chat from '@/models/Chat';
+import Message from '@/models/Message';
 import User from '@/models/User';
 import { verifyToken } from '@/lib/auth';
 
@@ -37,6 +38,74 @@ export async function GET(request: NextRequest) {
   } catch (error: any) {
     return NextResponse.json(
       { message: error.message || 'Failed to fetch chats' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json(
+        { message: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = verifyToken(token);
+
+    if (!decoded || !decoded.userId) {
+      return NextResponse.json(
+        { message: 'Invalid token' },
+        { status: 401 }
+      );
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(decoded.userId)) {
+      return NextResponse.json(
+        { message: 'Invalid user' },
+        { status: 401 }
+      );
+    }
+
+    await connectDB();
+
+    const userObjectId = new mongoose.Types.ObjectId(decoded.userId);
+
+    // Find all chats the user participates in
+    const chats = await Chat.find({
+      participants: userObjectId,
+    }).select('_id');
+
+    if (!chats.length) {
+      return NextResponse.json(
+        { message: 'No chats to clear' },
+        { status: 200 }
+      );
+    }
+
+    const chatIds = chats.map((c) => c._id);
+
+    // Delete all messages belonging to those chats, but keep the chats themselves
+    await Message.deleteMany({ chat: { $in: chatIds } });
+
+    // Clear lastMessage on all affected chats so previews are accurate
+    await Chat.updateMany(
+      { _id: { $in: chatIds } },
+      { $unset: { lastMessage: "" } }
+    );
+
+    return NextResponse.json(
+      { message: 'Message history cleared successfully' },
+      { status: 200 }
+    );
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to delete chats';
+    console.error('DELETE /api/chats error:', error);
+    return NextResponse.json(
+      { message },
       { status: 500 }
     );
   }

@@ -3,7 +3,13 @@ import connectDB from '@/lib/mongodb';
 import Message from '@/models/Message';
 import Chat from '@/models/Chat';
 import { verifyToken } from '@/lib/auth';
-import { translate, detectSourceLanguage, detectLanguageLLM, translateWithContext } from '@/lib/cloudflare-worker';
+import {
+  translate,
+  detectSourceLanguage,
+  detectLanguageLLM,
+  translateWithContext,
+  transcribe,
+} from '@/lib/cloudflare-worker';
 
 export async function GET(
   request: NextRequest,
@@ -71,6 +77,59 @@ export async function GET(
   }
 }
 
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { chatId: string } }
+) {
+  try {
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json(
+        { message: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = verifyToken(token);
+
+    if (!decoded || !decoded.userId) {
+      return NextResponse.json(
+        { message: 'Invalid token' },
+        { status: 401 }
+      );
+    }
+
+    await connectDB();
+
+    const chat = await Chat.findById(params.chatId);
+    if (!chat || !chat.participants.includes(decoded.userId)) {
+      return NextResponse.json(
+        { message: 'Chat not found' },
+        { status: 404 }
+      );
+    }
+
+    // Delete all messages within this chat but keep the chat itself
+    await Message.deleteMany({ chat: params.chatId });
+
+    // Clear lastMessage reference so UI doesn't show stale preview
+    await Chat.findByIdAndUpdate(params.chatId, {
+      $unset: { lastMessage: "" },
+    });
+
+    return NextResponse.json(
+      { message: 'Messages deleted successfully' },
+      { status: 200 }
+    );
+  } catch (error: any) {
+    return NextResponse.json(
+      { message: error.message || 'Failed to delete messages' },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: { chatId: string } }
@@ -112,19 +171,12 @@ export async function POST(
     if (msgType === 'voice' && mediaUrl && typeof mediaUrl === 'string' && mediaUrl.startsWith('data:audio')) {
       try {
         const base64 = mediaUrl.includes(',') ? mediaUrl.split(',')[1] : mediaUrl;
-        const transcribeRes = await fetch(`${process.env.NEXT_PUBLIC_WORDBRIDGE_WORKER_URL || 'https://wordbridge-ai.shaikabduljaleel1214.workers.dev'}/transcribe`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ audio: base64, sourceLang: 'auto' }),
-        });
-        if (transcribeRes.ok) {
-          const transData = await transcribeRes.json();
-          if (transData.text && transData.text.trim()) {
-            finalContent = transData.text.trim();
-          }
+        const transcript = await transcribe({ audioBase64: base64, sourceLang: 'auto' });
+        if (transcript?.trim()) {
+          finalContent = transcript.trim();
         }
-      } catch {
-        // Keep "Voice message" fallback
+      } catch (err) {
+        console.error('[messages POST] voice transcribe failed:', err);
       }
     }
 

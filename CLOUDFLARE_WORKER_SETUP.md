@@ -239,6 +239,45 @@ export default {
 
 ---
 
+## Fix `/transcribe` (Whisper) — required for voice notes
+
+Cloudflare’s `@cf/openai/whisper-large-v3-turbo` model expects **`audio` as a base64 string**. Passing a decoded byte array (e.g. `[...Uint8Array]`) causes **500** errors.
+
+Replace your `/transcribe` handler with:
+
+```javascript
+if (request.method === 'POST' && url.pathname === '/transcribe') {
+  try {
+    const { audio, sourceLang } = await request.json();
+    if (!audio) {
+      return new Response(JSON.stringify({ error: 'Missing audio' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      });
+    }
+    const base64 = audio.includes(',') ? audio.split(',')[1] : audio;
+    const aiInput = { audio: base64, task: 'transcribe' };
+    if (sourceLang && sourceLang !== 'auto' && typeof sourceLang === 'string') {
+      aiInput.language = sourceLang;
+    }
+    const result = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiInput);
+    return new Response(JSON.stringify({ text: result.text || '' }), {
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    });
+  } catch (e) {
+    console.error('transcribe', e);
+    return new Response(JSON.stringify({ error: String(e?.message || e) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    });
+  }
+}
+```
+
+Docs: [whisper-large-v3-turbo](https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/).
+
+---
+
 ## ✅ Testing
 
 After adding these endpoints, test them:

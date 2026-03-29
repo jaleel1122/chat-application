@@ -69,19 +69,20 @@ if (request.method === "POST" && url.pathname === "/transcribe") {
       );
     }
 
-    // Whisper expects base64 audio (without data URL prefix)
+    // Raw base64 only (no data: URL prefix). Workers AI Whisper expects a base64 STRING for `audio`, not a byte array.
+    // https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/
     const base64 = audio.includes(",") ? audio.split(",")[1] : audio;
 
-    const result = await env.AI.run(
-      "@cf/openai/whisper-large-v3-turbo",
-      {
-        audio: [...Uint8Array.from(atob(base64), c => c.charCodeAt(0))],
-        language: sourceLang === "auto" ? undefined : sourceLang,
-      }
-    );
+    const aiInput = { audio: base64, task: "transcribe" };
+    if (sourceLang && sourceLang !== "auto" && typeof sourceLang === "string") {
+      aiInput.language = sourceLang;
+    }
+
+    const result = await env.AI.run("@cf/openai/whisper-large-v3-turbo", aiInput);
+    const text = result.text || "";
 
     return new Response(
-      JSON.stringify({ text: result.text || result.transcript || "" }),
+      JSON.stringify({ text }),
       {
         headers: {
           "Content-Type": "application/json",
@@ -161,12 +162,12 @@ export default {
           );
         }
         const base64 = audio.includes(",") ? audio.split(",")[1] : audio;
-        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-        const result = await env.AI.run("@cf/openai/whisper-large-v3-turbo", {
-          audio: [...bytes],
-          language: sourceLang === "auto" ? undefined : sourceLang,
-        });
-        const text = result.text || result.transcript || "";
+        const aiInput = { audio: base64, task: "transcribe" };
+        if (sourceLang && sourceLang !== "auto" && typeof sourceLang === "string") {
+          aiInput.language = sourceLang;
+        }
+        const result = await env.AI.run("@cf/openai/whisper-large-v3-turbo", aiInput);
+        const text = result.text || "";
         return new Response(
           JSON.stringify({ text }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
